@@ -4,6 +4,8 @@ use std::io::Result;
 #[cfg(unix)]
 pub const SOCK_ADDR: &str = r"unix:///tmp/ttrpc-test";
 
+pub const TCP_SOCK_ADDR: &str = "tcp://127.0.0.1:1919";
+
 #[cfg(windows)]
 pub const SOCK_ADDR: &str = r"\\.\pipe\ttrpc-test";
 

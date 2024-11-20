@@ -13,7 +13,10 @@
 use nix::fcntl::FdFlag;
 use nix::fcntl::{fcntl, FcntlArg, OFlag};
 use nix::sys::socket::*;
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::os::unix::io::RawFd;
+use std::os::unix::io::AsRawFd;
+use nix::unistd::dup;
 
 use crate::error::{Error, Result};
 
@@ -22,6 +25,7 @@ pub(crate) enum Domain {
     Unix,
     #[cfg(any(target_os = "linux", target_os = "android"))]
     Vsock,
+    Tcp,
 }
 
 pub(crate) fn do_listen(listener: RawFd) -> Result<()> {
@@ -42,6 +46,10 @@ fn parse_sockaddr(addr: &str) -> Result<(Domain, &str)> {
 
     if let Some(addr) = addr.strip_prefix("vsock://") {
         return Ok((Domain::Vsock, addr));
+    }
+
+    if let Some(addr) = addr.strip_prefix("tcp://") {
+        return Ok((Domain::Tcp, addr));
     }
 
     Err(Error::Others(format!("Scheme {addr:?} is not supported")))
@@ -93,6 +101,9 @@ fn make_addr(domain: Domain, sockaddr: &str) -> Result<UnixAddr> {
         Domain::Vsock => Err(Error::Others(
             "function make_addr does not support create vsock socket".to_string(),
         )),
+        Domain::Tcp => Err(Error::Others(
+            "function make_addr does not support create tcp socket".to_string(),
+        )),
     }
 }
 
@@ -140,7 +151,8 @@ fn make_socket(addr: (&str, u32)) -> Result<(RawFd, Domain, Box<dyn SockaddrLike
             let cid = addr.1;
             let sockaddr = VsockAddr::new(cid, port);
             (fd, Box::new(sockaddr))
-        }
+        },
+        Domain::Tcp => get_sock_addr(domain, sockaddrv)?,
     };
 
     Ok((fd, domain, sockaddr))
@@ -157,6 +169,19 @@ use libc::VMADDR_CID_HOST;
 const VMADDR_CID_HOST: u32 = 0;
 
 pub(crate) fn do_bind(sockaddr: &str) -> Result<(RawFd, Domain)> {
+    if sockaddr.starts_with("tcp://") {
+        let addr_str = &sockaddr[6..];
+        let addr = addr_str.parse::<SocketAddr>().map_err(|e| {
+            Error::Others(format!("failed to parse tcp address: {sockaddr}, {e}"))
+        })?;
+        let listener = TcpListener::bind(addr).unwrap();
+    
+        let fd = listener.as_raw_fd();
+        setsockopt(fd, sockopt::ReusePort, &true)?;
+        let duplicated_fd = dup(fd).expect("Failed to duplicate file descriptor");
+        return Ok((duplicated_fd, Domain::Tcp));
+    }
+
     let (fd, domain, sockaddr) = make_socket((sockaddr, VMADDR_CID_ANY))?;
 
     setsockopt(fd, sockopt::ReusePort, &true)?;
@@ -167,11 +192,20 @@ pub(crate) fn do_bind(sockaddr: &str) -> Result<(RawFd, Domain)> {
 
 /// Creates a unix socket for client.
 pub(crate) unsafe fn client_connect(sockaddr: &str) -> Result<RawFd> {
+    if sockaddr.starts_with("tcp://") {
+        let addr_str = &sockaddr[6..];
+        let addr: SocketAddr = addr_str.parse().map_err(|e| Error::Others(format!("failed to parse tcp address: {sockaddr}, {e}")))?;
+        let stream = TcpStream::connect(addr).map_err(|e| Error::Others(format!("failed to connect to tcp address: {sockaddr}, {e}")))?;
+        let fd = stream.as_raw_fd();
+        let duplicated_fd = dup(fd).expect("Failed to duplicate file descriptor");
+        return Ok(duplicated_fd);
+    }
     let (fd, _, sockaddr) = make_socket((sockaddr, VMADDR_CID_HOST))?;
 
     connect(fd, sockaddr.as_ref())?;
+    let duplicated_fd = dup(fd).expect("Failed to duplicate file descriptor");
 
-    Ok(fd)
+    Ok(duplicated_fd)
 }
 
 #[cfg(test)]
@@ -197,6 +231,7 @@ mod tests {
                 true,
             ),
             ("abc:///run/c.sock", None, "", false),
+            ("tcp://127.0.0.1:1919", Some(Domain::Tcp), "127.0.0.1:1919", true),
         ] {
             let (input, domain, addr, success) = (i.0, i.1, i.2, i.3);
             let r = parse_sockaddr(input);

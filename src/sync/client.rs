@@ -47,6 +47,7 @@ pub struct Client {
 
 impl Client {
     pub fn connect(sockaddr: &str) -> Result<Client> {
+        trace!("connect sockaddr {}", sockaddr);
         let conn = ClientConnection::client_connect(sockaddr)?;
 
         Self::new_client(conn)
@@ -55,6 +56,7 @@ impl Client {
     #[cfg(unix)]
     /// Initialize a new [`Client`] from raw file descriptor.
     pub fn new(fd: RawFd) -> Result<Client> {
+        trace!("connect new {}", fd);
         let conn = ClientConnection::new(fd);
 
         Self::new_client(conn)
