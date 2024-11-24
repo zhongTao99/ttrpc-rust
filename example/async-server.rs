@@ -100,10 +100,10 @@ async fn main() {
     let hservice = health_ttrpc::create_health(Arc::new(HealthService {}));
     let aservice = agent_ttrpc::create_agent_service(Arc::new(AgentService {}));
 
-    utils::remove_if_sock_exist(utils::SOCK_ADDR).unwrap();
+    // utils::remove_if_sock_exist(utils::SOCK_ADDR).unwrap();
 
     let mut server = Server::new()
-        .bind(utils::SOCK_ADDR)
+        .bind(utils::TCP_SOCK_ADDR)
         .unwrap()
         .register_service(hservice)
         .register_service(aservice);
