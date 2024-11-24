@@ -13,6 +13,7 @@ use std::os::unix::net::UnixListener as SysUnixListener;
 use std::result::Result as StdResult;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::net::TcpListener;
 
 use async_trait::async_trait;
 use futures::stream::Stream;
@@ -31,7 +32,7 @@ use tokio::{
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use tokio_vsock::VsockListener;
 
-use crate::asynchronous::{stream::SendingMessage, unix_incoming::UnixIncoming};
+use crate::asynchronous::{stream::SendingMessage, unix_incoming::UnixIncoming, tcp_incomming::TcpIncoming};
 use crate::common::{self, Domain};
 use crate::context;
 use crate::error::{get_status, Error, Result};
@@ -112,6 +113,11 @@ impl Server {
         self
     }
 
+    pub fn set_domain_tcp(mut self) -> Self {
+        self.domain = Some(Domain::Tcp);
+        self
+    }
+
     #[cfg(any(target_os = "linux", target_os = "android"))]
     pub fn set_domain_vsock(mut self) -> Self {
         self.domain = Some(Domain::Vsock);
@@ -166,6 +172,20 @@ impl Server {
                 let incoming = unsafe { VsockListener::from_raw_fd(listenfd).incoming() };
                 self.do_start(incoming).await
             }
+            Some(Domain::Tcp) => {
+                let sys_tcp_listener;
+                unsafe {
+                    sys_tcp_listener = std::net::TcpListener::from_raw_fd(listenfd);
+                }
+                sys_tcp_listener
+                    .set_nonblocking(true)
+                    .map_err(err_to_others_err!(e, "set_nonblocking error "))?;
+                let tcp_listener = TcpListener::from_std(sys_tcp_listener)
+                    .map_err(err_to_others_err!(e, "from_std error "))?;
+
+                let incoming = TcpIncoming::new(tcp_listener);
+                self.do_start(incoming).await
+            },
             _ => Err(Error::Others(
                 "Domain is not set or not supported".to_string(),
             )),
